@@ -1,0 +1,54 @@
+:root {
+  --bg-top: #8db8d8;
+  --bg-bottom: #d4e7f3;
+  --hud-bg: rgba(12, 22, 32, 0.72);
+  --hud-fg: #f7fbff;
+  --hud-muted: #c8d9e8;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+  background: linear-gradient(180deg, var(--bg-top), var(--bg-bottom));
+}
+
+#app,
+canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+#hud {
+  position: fixed;
+  top: 12px;
+  left: 12px;
+  min-width: 360px;
+  max-width: min(90vw, 760px);
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--hud-bg);
+  color: var(--hud-fg);
+  backdrop-filter: blur(6px);
+  box-shadow: 0 10px 22px rgba(0, 0, 0, 0.25);
+  line-height: 1.4;
+  font-size: 13px;
+}
+
+.hud-row {
+  display: grid;
+  grid-template-columns: 80px 1fr;
+  gap: 10px;
+}
+
+.controls {
+  margin-top: 8px;
+  color: var(--hud-muted);
+}
