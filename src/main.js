@@ -4,6 +4,9 @@ const app = document.getElementById("app");
 const hudSpeed = document.getElementById("hud-speed");
 const hudAlt = document.getElementById("hud-alt");
 const hudHeading = document.getElementById("hud-heading");
+const hudCardinal = document.getElementById("hud-cardinal");
+const hudSurface = document.getElementById("hud-surface");
+const attribution = document.getElementById("attribution");
 
 const TERRAIN_TILE = {
   lat: 48.4283,
@@ -121,6 +124,96 @@ function decodeTerrariumHeight(r, g, b) {
   return r * 256 + g + b / 256 - 32768;
 }
 
+function headingToCardinal(headingDeg) {
+  const directions = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
+  const normalized = (headingDeg % 360 + 360) % 360;
+  const index = Math.round(normalized / 45) % directions.length;
+  return directions[index];
+}
+
+function parseEnvValue(raw) {
+  const trimmed = raw.trim();
+  if (
+    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'"))
+  ) {
+    return trimmed.slice(1, -1);
+  }
+  return trimmed;
+}
+
+async function loadApiKeyFromEnvFile() {
+  try {
+    const response = await fetch("./.env", { cache: "no-store" });
+    if (!response.ok) return "";
+
+    const body = await response.text();
+    const lines = body.split(/\r?\n/);
+
+    for (const line of lines) {
+      const cleaned = line.trim();
+      if (!cleaned || cleaned.startsWith("#") || !cleaned.includes("=")) continue;
+
+      const sep = cleaned.indexOf("=");
+      const key = cleaned.slice(0, sep).trim();
+      const value = parseEnvValue(cleaned.slice(sep + 1));
+
+      if (key === "MAP_TILES_API_KEY" || key === "GOOGLE_MAPS_API_KEY") {
+        return value;
+      }
+    }
+
+    return "";
+  } catch {
+    return "";
+  }
+}
+
+async function resolveApiKey() {
+  if (window.__APP_CONFIG__) {
+    const fromConfig =
+      window.__APP_CONFIG__.MAP_TILES_API_KEY || window.__APP_CONFIG__.GOOGLE_MAPS_API_KEY || "";
+    if (fromConfig) return fromConfig;
+  }
+
+  return loadApiKeyFromEnvFile();
+}
+
+function lonLatToTile(lon, lat, zoom) {
+  const n = 2 ** zoom;
+  const x = Math.floor(((lon + 180) / 360) * n);
+  const latRad = THREE.MathUtils.degToRad(lat);
+  const y = Math.floor(((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2) * n);
+  return { x, y };
+}
+
+async function createGoogleMapsSession(apiKey) {
+  const response = await fetch(`https://tile.googleapis.com/v1/createSession?key=${encodeURIComponent(apiKey)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      mapType: "satellite",
+      language: "en-US",
+      region: "CA",
+      scale: "scaleFactor1x",
+      highDpi: false,
+      imageFormat: "png",
+    }),
+  });
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`Map Tiles session failed (${response.status}): ${body}`);
+  }
+
+  const session = await response.json();
+  if (!session.session) {
+    throw new Error("Map Tiles session token was missing in response.");
+  }
+
+  return session.session;
+}
+
 function loadImage(path) {
   return new Promise((resolve, reject) => {
     const image = new Image();
@@ -166,21 +259,47 @@ async function createTerrainMesh() {
 
   geometry.computeVertexNormals();
 
-  const mesh = new THREE.Mesh(
-    geometry,
-    new THREE.MeshStandardMaterial({
-      color: 0x7f9772,
-      roughness: 0.95,
-      metalness: 0.02,
-    }),
-  );
+  const material = new THREE.MeshStandardMaterial({
+    color: 0x7f9772,
+    roughness: 0.95,
+    metalness: 0.02,
+  });
+
+  const mesh = new THREE.Mesh(geometry, material);
 
   const centerPx = Math.floor(image.width / 2);
   const centerPy = Math.floor(image.height / 2);
   const centerIdx = (centerPy * image.width + centerPx) * 4;
   const centerHeight = decodeTerrariumHeight(data[centerIdx], data[centerIdx + 1], data[centerIdx + 2]);
 
-  return { mesh, minHeight, maxHeight, centerHeight };
+  return { mesh, material, minHeight, maxHeight, centerHeight };
+}
+
+async function applyGoogleSatelliteTexture(material) {
+  const apiKey = await resolveApiKey();
+  if (!apiKey) {
+    hudSurface.textContent = "DEM (local) - no key";
+    return;
+  }
+
+  const sessionToken = await createGoogleMapsSession(apiKey);
+  const tile = lonLatToTile(TERRAIN_TILE.lon, TERRAIN_TILE.lat, TERRAIN_TILE.zoom);
+  const tileUrl =
+    `https://tile.googleapis.com/v1/2dtiles/${TERRAIN_TILE.zoom}/${tile.x}/${tile.y}` +
+    `?session=${encodeURIComponent(sessionToken)}&key=${encodeURIComponent(apiKey)}`;
+
+  const texture = await new THREE.TextureLoader().loadAsync(tileUrl);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.wrapS = THREE.ClampToEdgeWrapping;
+  texture.wrapT = THREE.ClampToEdgeWrapping;
+
+  material.map = texture;
+  material.color.setHex(0xffffff);
+  material.roughness = 0.92;
+  material.needsUpdate = true;
+
+  hudSurface.textContent = "Google Satellite";
+  attribution.hidden = false;
 }
 
 const clock = new THREE.Clock();
@@ -219,10 +338,12 @@ function animate() {
 
   const speed = Math.hypot(forwardVel, strafeVel, verticalVel);
   const heading = THREE.MathUtils.radToDeg(camera.rotation.y);
+  const normalizedHeading = (heading % 360) + 360;
 
   hudSpeed.textContent = `${speed.toFixed(1)} m/s`;
   hudAlt.textContent = `${camera.position.y.toFixed(1)} m`;
-  hudHeading.textContent = `${((heading % 360) + 360).toFixed(0)}°`;
+  hudHeading.textContent = `${(normalizedHeading % 360).toFixed(0)}°`;
+  hudCardinal.textContent = headingToCardinal(normalizedHeading);
 
   renderer.render(scene, camera);
 }
@@ -234,6 +355,13 @@ async function init() {
 
     camera.position.set(0, terrain.centerHeight + 220, 380);
     water.position.y = Math.max(0, Math.min(terrain.minHeight + 5, 15));
+
+    try {
+      await applyGoogleSatelliteTexture(terrain.material);
+    } catch (error) {
+      hudSurface.textContent = "DEM (local) - google failed";
+      console.error(error);
+    }
   } catch (error) {
     console.error(error);
   }

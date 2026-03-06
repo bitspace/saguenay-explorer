@@ -52,3 +52,15 @@ canvas {
   margin-top: 8px;
   color: var(--hud-muted);
 }
+
+#attribution {
+  position: fixed;
+  right: 12px;
+  bottom: 12px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: rgba(10, 16, 22, 0.7);
+  color: #f0f5fa;
+  font-size: 11px;
+  letter-spacing: 0.02em;
+}

@@ -24,6 +24,9 @@ Build a responsive web-based first-person flyover over Saguenay, QC with moderat
 ## Runtime Terrain Strategy (Current)
 - Single static 256x256 DEM tile mesh centered on Saguenay.
 - Plane geometry segments match source raster grid.
+- Optional Google satellite imagery drape via Map Tiles API:
+  - `POST /v1/createSession`
+  - `GET /v1/2dtiles/{z}/{x}/{y}?session=...&key=...`
 - Fog and simple materials for performance.
 
 ## Runtime Terrain Strategy (Next)

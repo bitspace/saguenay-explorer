@@ -30,13 +30,24 @@ This project is intentionally no-build for quick iteration.
 - Default fetch target:
   - `assets/terrain/saguenay-center-z10-x309-y354.png`
   - `assets/terrain/saguenay-center-z10-x309-y354.json`
+- Optional imagery overlay:
+  - Google Map Tiles API satellite tile for the same `z/x/y`
+  - Reads key from `.env` (`MAP_TILES_API_KEY` or `GOOGLE_MAPS_API_KEY`)
 
 ## Project Structure
 - `index.html` - app shell
 - `src/styles.css` - styling and HUD
-- `src/main.js` - Three.js scene, Terrarium terrain decoding, and controls
+- `src/main.js` - Three.js scene, DEM decoding, Google satellite overlay, and controls
 - `scripts/fetch_terrarium_tile.sh` - DEM tile downloader + metadata writer
 - `docs/implementation-spec.md` - concrete build and data pipeline plan
+
+## Google Map Tiles Setup
+1. Enable `Map Tiles API` in your GCP project.
+2. Add a key to `.env` (already gitignored), for example:
+   - `MAP_TILES_API_KEY=your_key_here`
+3. Ensure key restrictions allow:
+   - Referrer: `http://localhost:5173/*`
+   - API: `Map Tiles API`
 
 ## Attribution
 - Terrain tiles from `https://github.com/tilezen/joerd/blob/master/docs/terrarium.md`
