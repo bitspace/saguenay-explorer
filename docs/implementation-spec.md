@@ -9,22 +9,24 @@ Build a responsive web-based first-person flyover over Saguenay, QC with moderat
 - Static hosting (GitHub Pages / Netlify / Vercel)
 
 ## Coordinate Strategy
-- Local tangent plane around Saguenay center (approx. 48.43, -71.06).
-- Convert geospatial DEM samples into local `x, y, z` meters.
+- Local tangent-like meter space centered on a Saguenay tile center.
+- Convert DEM samples into local `x, y, z` meters.
 - Keep camera and terrain in meter-scale units for movement tuning.
 
-## Terrain Data Pipeline (Planned)
-1. Source DEM for Saguenay area (CDEM/SRTM/Copernicus DEM).
-2. Clip AOI around municipal extent + fjord corridor.
-3. Reproject to metric CRS suitable for Quebec workflows.
-4. Resample to performance-oriented resolutions:
-   - Near chunks: 128x128 / 256x256
-   - Far chunks: 64x64
-5. Export tiled heightmaps and optional color masks:
-   - `assets/terrain/z{L}/tile_x_y.bin` (Float32 or Uint16)
-   - Metadata JSON for bounds, scale, and min/max elevation.
+## Terrain Data Pipeline (Implemented)
+1. Source DEM tile from Mapzen Terrarium (`elevation-tiles-prod`).
+2. Compute tile index (`z/x/y`) for a target lat/lon.
+3. Download PNG tile + metadata JSON with:
+   - `./scripts/fetch_terrarium_tile.sh [lat lon zoom out_dir name_prefix]`
+4. Decode terrain in app using Terrarium formula:
+   - `height_m = R * 256 + G + B / 256 - 32768`
 
-## Runtime Terrain Strategy
+## Runtime Terrain Strategy (Current)
+- Single static 256x256 DEM tile mesh centered on Saguenay.
+- Plane geometry segments match source raster grid.
+- Fog and simple materials for performance.
+
+## Runtime Terrain Strategy (Next)
 - Chunked terrain manager centered on camera.
 - 2-3 LOD rings based on distance.
 - Frustum culling and pooled meshes.
@@ -48,7 +50,7 @@ Build a responsive web-based first-person flyover over Saguenay, QC with moderat
 
 ## Milestones
 1. MVP: procedural terrain + keyboard fly controls.
-2. DEM ingest script + one static terrain tile set.
-3. Runtime chunked LOD system.
+2. Real DEM tile ingest + static DEM terrain rendering.
+3. Runtime multi-tile chunk loading and LOD.
 4. Water/river mask and POI overlays.
 5. Optional guided tour path mode.

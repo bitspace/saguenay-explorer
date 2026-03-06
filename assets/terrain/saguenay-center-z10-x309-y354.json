@@ -1,0 +1,13 @@
+{
+  "name": "saguenay-center-z10-x309-y354",
+  "source": "Mapzen Terrarium via elevation-tiles-prod",
+  "url": "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/10/309/354.png",
+  "lat": 48.4283,
+  "lon": -71.0619,
+  "zoom": 10,
+  "tileX": 309,
+  "tileY": 354,
+  "metersPerPixelAtLat": 101.44061567331194,
+  "tileSizeMetersAtLat": 25968.797612367856,
+  "format": "Terrarium PNG (height = R*256 + G + B/256 - 32768)"
+}
