@@ -22,17 +22,19 @@ Build a responsive web-based first-person flyover over Saguenay, QC with moderat
    - `height_m = R * 256 + G + B / 256 - 32768`
 
 ## Runtime Terrain Strategy (Current)
-- Single static 256x256 DEM tile mesh centered on Saguenay.
-- Plane geometry segments match source raster grid.
+- Dynamic multi-tile DEM mesh around camera at `z11`.
+- LOD rings by tile distance:
+  - Ring 0: high detail (255 segments)
+  - Ring 1: medium detail (96 segments)
+  - Ring 2: low detail (48 segments)
 - Optional Google satellite imagery drape via Map Tiles API:
   - `POST /v1/createSession`
   - `GET /v1/2dtiles/{z}/{x}/{y}?session=...&key=...`
 - Fog and simple materials for performance.
 
 ## Runtime Terrain Strategy (Next)
-- Chunked terrain manager centered on camera.
-- 2-3 LOD rings based on distance.
-- Frustum culling and pooled meshes.
+- Tile-level frustum culling and prioritized load queue.
+- Extend to 3+ LOD rings with hysteresis to reduce tile churn.
 - Height sampling for collision floor and altitude cues.
 
 ## Controls

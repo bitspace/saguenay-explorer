@@ -8,17 +8,29 @@ const hudCardinal = document.getElementById("hud-cardinal");
 const hudSurface = document.getElementById("hud-surface");
 const attribution = document.getElementById("attribution");
 
-const TERRAIN_TILE = {
+const TERRAIN_CENTER = {
   lat: 48.4283,
   lon: -71.0619,
-  zoom: 10,
-  imagePath: "./assets/terrain/saguenay-center-z10-x309-y354.png",
+  zoom: 11,
 };
 
-const scene = new THREE.Scene();
-scene.fog = new THREE.Fog(0xa7c3d7, 140, 3000);
+const TERRAIN_TILE_SIZE_PX = 256;
+const TERRAIN_FETCH_TEMPLATE =
+  "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png";
 
-const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 7000);
+const TERRAIN_LOD_RINGS = [
+  { radius: 0, segments: 255 },
+  { radius: 1, segments: 96 },
+  { radius: 2, segments: 48 },
+];
+
+const TERRAIN_MAX_RADIUS = TERRAIN_LOD_RINGS[TERRAIN_LOD_RINGS.length - 1].radius;
+const TERRAIN_SYNC_INTERVAL_SECONDS = 0.2;
+
+const scene = new THREE.Scene();
+scene.fog = new THREE.Fog(0xa7c3d7, 160, 3600);
+
+const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 10000);
 camera.position.set(0, 240, 200);
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -26,6 +38,9 @@ renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setClearColor(0x9fc2db, 1);
 app.appendChild(renderer.domElement);
+
+const terrainGroup = new THREE.Group();
+scene.add(terrainGroup);
 
 const hemiLight = new THREE.HemisphereLight(0xdbefff, 0x4a6170, 1.1);
 scene.add(hemiLight);
@@ -35,7 +50,7 @@ sun.position.set(-300, 400, 200);
 scene.add(sun);
 
 const farGround = new THREE.Mesh(
-  new THREE.PlaneGeometry(9000, 9000, 1, 1),
+  new THREE.PlaneGeometry(12000, 12000, 1, 1),
   new THREE.MeshStandardMaterial({ color: 0x6f8570, roughness: 0.98 }),
 );
 farGround.rotation.x = -Math.PI / 2;
@@ -43,13 +58,13 @@ farGround.position.y = -10;
 scene.add(farGround);
 
 const water = new THREE.Mesh(
-  new THREE.PlaneGeometry(9000, 9000, 1, 1),
+  new THREE.PlaneGeometry(12000, 12000, 1, 1),
   new THREE.MeshStandardMaterial({
     color: 0x4b7693,
     metalness: 0.14,
     roughness: 0.62,
     transparent: true,
-    opacity: 0.84,
+    opacity: 0.82,
   }),
 );
 water.rotation.x = -Math.PI / 2;
@@ -64,10 +79,10 @@ const movement = {
   turn: 0,
 };
 
-const maxSpeed = 220;
-const maxVerticalSpeed = 140;
-const accel = 300;
-const verticalAccel = 220;
+const maxSpeed = 260;
+const maxVerticalSpeed = 150;
+const accel = 320;
+const verticalAccel = 230;
 const drag = 6;
 const turnSpeed = 1.8;
 
@@ -85,6 +100,33 @@ const keyMap = {
   PageUp: () => (movement.vertical = 1),
   PageDown: () => (movement.vertical = -1),
 };
+
+const terrainTiles = new Map();
+const tileRequests = new Map();
+const decodedTileCache = new Map();
+
+const googleTiles = {
+  apiKey: "",
+  session: "",
+  ready: false,
+  failed: false,
+};
+
+let terrainSyncTimer = 0;
+let minLoadedHeight = Number.POSITIVE_INFINITY;
+let maxLoadedHeight = Number.NEGATIVE_INFINITY;
+
+function tileKey(x, y) {
+  return `${x}/${y}`;
+}
+
+function tileRequestKey(x, y, segments) {
+  return `${x}/${y}/${segments}`;
+}
+
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
 
 function updateMovementState() {
   movement.forward = keyDown.has("w") ? 1 : keyDown.has("s") ? -1 : 0;
@@ -187,6 +229,13 @@ function lonLatToTile(lon, lat, zoom) {
   return { x, y };
 }
 
+function terrariumTileUrl(zoom, x, y) {
+  return TERRAIN_FETCH_TEMPLATE
+    .replace("{z}", String(zoom))
+    .replace("{x}", String(x))
+    .replace("{y}", String(y));
+}
+
 async function createGoogleMapsSession(apiKey) {
   const response = await fetch(`https://tile.googleapis.com/v1/createSession?key=${encodeURIComponent(apiKey)}`, {
     method: "POST",
@@ -214,17 +263,23 @@ async function createGoogleMapsSession(apiKey) {
   return session.session;
 }
 
-function loadImage(path) {
+function loadImage(path, crossOrigin = "") {
   return new Promise((resolve, reject) => {
     const image = new Image();
+    if (crossOrigin) image.crossOrigin = crossOrigin;
     image.onload = () => resolve(image);
-    image.onerror = () => reject(new Error(`Failed to load terrain image: ${path}`));
+    image.onerror = () => reject(new Error(`Failed to load image: ${path}`));
     image.src = path;
   });
 }
 
-async function createTerrainMesh() {
-  const image = await loadImage(TERRAIN_TILE.imagePath);
+async function decodeTileHeights(x, y) {
+  const cacheKey = tileKey(x, y);
+  if (decodedTileCache.has(cacheKey)) {
+    return decodedTileCache.get(cacheKey);
+  }
+
+  const image = await loadImage(terrariumTileUrl(TERRAIN_CENTER.zoom, x, y), "anonymous");
 
   const canvas = document.createElement("canvas");
   canvas.width = image.width;
@@ -234,9 +289,13 @@ async function createTerrainMesh() {
   ctx.drawImage(image, 0, 0);
 
   const { data } = ctx.getImageData(0, 0, image.width, image.height);
+  const decoded = { width: image.width, height: image.height, data };
+  decodedTileCache.set(cacheKey, decoded);
+  return decoded;
+}
 
-  const tileSizeMeters = metersPerPixelAtLatitude(TERRAIN_TILE.lat, TERRAIN_TILE.zoom) * image.width;
-  const geometry = new THREE.PlaneGeometry(tileSizeMeters, tileSizeMeters, image.width - 1, image.height - 1);
+function buildTerrainGeometry(decoded, segments, tileSizeMeters) {
+  const geometry = new THREE.PlaneGeometry(tileSizeMeters, tileSizeMeters, segments, segments);
   geometry.rotateX(-Math.PI / 2);
 
   const position = geometry.attributes.position;
@@ -246,11 +305,11 @@ async function createTerrainMesh() {
   let maxHeight = Number.NEGATIVE_INFINITY;
 
   for (let i = 0; i < position.count; i += 1) {
-    const px = Math.min(image.width - 1, Math.max(0, Math.round(uv.getX(i) * (image.width - 1))));
-    const py = Math.min(image.height - 1, Math.max(0, Math.round((1 - uv.getY(i)) * (image.height - 1))));
-    const idx = (py * image.width + px) * 4;
+    const px = clamp(Math.round(uv.getX(i) * (decoded.width - 1)), 0, decoded.width - 1);
+    const py = clamp(Math.round((1 - uv.getY(i)) * (decoded.height - 1)), 0, decoded.height - 1);
+    const idx = (py * decoded.width + px) * 4;
 
-    const height = decodeTerrariumHeight(data[idx], data[idx + 1], data[idx + 2]);
+    const height = decodeTerrariumHeight(decoded.data[idx], decoded.data[idx + 1], decoded.data[idx + 2]);
     position.setY(i, height);
 
     if (height < minHeight) minHeight = height;
@@ -259,34 +318,24 @@ async function createTerrainMesh() {
 
   geometry.computeVertexNormals();
 
-  const material = new THREE.MeshStandardMaterial({
-    color: 0x7f9772,
-    roughness: 0.95,
-    metalness: 0.02,
-  });
+  const centerPx = Math.floor(decoded.width / 2);
+  const centerPy = Math.floor(decoded.height / 2);
+  const centerIdx = (centerPy * decoded.width + centerPx) * 4;
+  const centerHeight = decodeTerrariumHeight(
+    decoded.data[centerIdx],
+    decoded.data[centerIdx + 1],
+    decoded.data[centerIdx + 2],
+  );
 
-  const mesh = new THREE.Mesh(geometry, material);
-
-  const centerPx = Math.floor(image.width / 2);
-  const centerPy = Math.floor(image.height / 2);
-  const centerIdx = (centerPy * image.width + centerPx) * 4;
-  const centerHeight = decodeTerrariumHeight(data[centerIdx], data[centerIdx + 1], data[centerIdx + 2]);
-
-  return { mesh, material, minHeight, maxHeight, centerHeight };
+  return { geometry, minHeight, maxHeight, centerHeight };
 }
 
-async function applyGoogleSatelliteTexture(material) {
-  const apiKey = await resolveApiKey();
-  if (!apiKey) {
-    hudSurface.textContent = "DEM (local) - no key";
-    return;
-  }
+async function applyGoogleSatelliteTexture(material, x, y) {
+  if (!googleTiles.ready) return;
 
-  const sessionToken = await createGoogleMapsSession(apiKey);
-  const tile = lonLatToTile(TERRAIN_TILE.lon, TERRAIN_TILE.lat, TERRAIN_TILE.zoom);
   const tileUrl =
-    `https://tile.googleapis.com/v1/2dtiles/${TERRAIN_TILE.zoom}/${tile.x}/${tile.y}` +
-    `?session=${encodeURIComponent(sessionToken)}&key=${encodeURIComponent(apiKey)}`;
+    `https://tile.googleapis.com/v1/2dtiles/${TERRAIN_CENTER.zoom}/${x}/${y}` +
+    `?session=${encodeURIComponent(googleTiles.session)}&key=${encodeURIComponent(googleTiles.apiKey)}`;
 
   const texture = await new THREE.TextureLoader().loadAsync(tileUrl);
   texture.colorSpace = THREE.SRGBColorSpace;
@@ -297,9 +346,167 @@ async function applyGoogleSatelliteTexture(material) {
   material.color.setHex(0xffffff);
   material.roughness = 0.92;
   material.needsUpdate = true;
+}
 
-  hudSurface.textContent = "Google Satellite";
-  attribution.hidden = false;
+function lodForDistance(dist) {
+  for (const ring of TERRAIN_LOD_RINGS) {
+    if (dist <= ring.radius) return ring.segments;
+  }
+  return TERRAIN_LOD_RINGS[TERRAIN_LOD_RINGS.length - 1].segments;
+}
+
+const centerTile = lonLatToTile(TERRAIN_CENTER.lon, TERRAIN_CENTER.lat, TERRAIN_CENTER.zoom);
+const tileSizeMeters = metersPerPixelAtLatitude(TERRAIN_CENTER.lat, TERRAIN_CENTER.zoom) * TERRAIN_TILE_SIZE_PX;
+
+function worldToTileIndex(worldX, worldZ) {
+  return {
+    x: centerTile.x + Math.round(worldX / tileSizeMeters),
+    y: centerTile.y + Math.round(worldZ / tileSizeMeters),
+  };
+}
+
+function tileToWorldPosition(x, y) {
+  return {
+    x: (x - centerTile.x) * tileSizeMeters,
+    z: (y - centerTile.y) * tileSizeMeters,
+  };
+}
+
+function disposeTile(tile) {
+  terrainGroup.remove(tile.mesh);
+  tile.mesh.geometry.dispose();
+
+  if (tile.mesh.material.map) {
+    tile.mesh.material.map.dispose();
+  }
+
+  tile.mesh.material.dispose();
+}
+
+async function ensureTerrainTile(x, y, segments) {
+  const key = tileKey(x, y);
+  const existing = terrainTiles.get(key);
+
+  if (existing && existing.segments === segments) {
+    return existing;
+  }
+
+  const requestId = tileRequestKey(x, y, segments);
+  if (tileRequests.has(requestId)) {
+    return tileRequests.get(requestId);
+  }
+
+  const promise = (async () => {
+    const decoded = await decodeTileHeights(x, y);
+    const built = buildTerrainGeometry(decoded, segments, tileSizeMeters);
+
+    minLoadedHeight = Math.min(minLoadedHeight, built.minHeight);
+    maxLoadedHeight = Math.max(maxLoadedHeight, built.maxHeight);
+
+    const material = new THREE.MeshStandardMaterial({
+      color: 0x7f9772,
+      roughness: 0.95,
+      metalness: 0.02,
+    });
+
+    const mesh = new THREE.Mesh(built.geometry, material);
+    const worldPos = tileToWorldPosition(x, y);
+    mesh.position.set(worldPos.x, 0, worldPos.z);
+
+    terrainGroup.add(mesh);
+
+    if (existing) {
+      disposeTile(existing);
+    }
+
+    const tile = { x, y, segments, mesh, centerHeight: built.centerHeight };
+    terrainTiles.set(key, tile);
+
+    try {
+      await applyGoogleSatelliteTexture(material, x, y);
+    } catch {
+      // Keep DEM-only material when Google imagery fails for a tile.
+    }
+
+    return tile;
+  })();
+
+  tileRequests.set(requestId, promise);
+
+  try {
+    return await promise;
+  } finally {
+    tileRequests.delete(requestId);
+  }
+}
+
+async function syncTerrainTiles(force = false) {
+  if (!force && terrainSyncTimer < TERRAIN_SYNC_INTERVAL_SECONDS) {
+    return;
+  }
+
+  terrainSyncTimer = 0;
+
+  const currentTile = worldToTileIndex(camera.position.x, camera.position.z);
+  const desired = new Map();
+
+  for (let dy = -TERRAIN_MAX_RADIUS; dy <= TERRAIN_MAX_RADIUS; dy += 1) {
+    for (let dx = -TERRAIN_MAX_RADIUS; dx <= TERRAIN_MAX_RADIUS; dx += 1) {
+      const distance = Math.max(Math.abs(dx), Math.abs(dy));
+      if (distance > TERRAIN_MAX_RADIUS) continue;
+
+      const x = currentTile.x + dx;
+      const y = currentTile.y + dy;
+      const segments = lodForDistance(distance);
+      desired.set(tileKey(x, y), { x, y, segments });
+    }
+  }
+
+  const loads = [];
+
+  for (const target of desired.values()) {
+    const existing = terrainTiles.get(tileKey(target.x, target.y));
+    if (!existing || existing.segments !== target.segments) {
+      loads.push(ensureTerrainTile(target.x, target.y, target.segments));
+    }
+  }
+
+  for (const [key, tile] of terrainTiles.entries()) {
+    if (!desired.has(key)) {
+      disposeTile(tile);
+      terrainTiles.delete(key);
+    }
+  }
+
+  if (loads.length) {
+    await Promise.allSettled(loads);
+  }
+
+  if (Number.isFinite(minLoadedHeight) && Number.isFinite(maxLoadedHeight)) {
+    water.position.y = clamp(minLoadedHeight + 4, -5, 20);
+  }
+}
+
+async function initGoogleTiles() {
+  const apiKey = await resolveApiKey();
+  if (!apiKey) {
+    hudSurface.textContent = "DEM (local) - no key";
+    googleTiles.failed = true;
+    return;
+  }
+
+  try {
+    const session = await createGoogleMapsSession(apiKey);
+    googleTiles.apiKey = apiKey;
+    googleTiles.session = session;
+    googleTiles.ready = true;
+    hudSurface.textContent = "Google Satellite";
+    attribution.hidden = false;
+  } catch (error) {
+    googleTiles.failed = true;
+    hudSurface.textContent = "DEM (local) - google failed";
+    console.error(error);
+  }
 }
 
 const clock = new THREE.Clock();
@@ -308,6 +515,7 @@ function animate() {
   requestAnimationFrame(animate);
 
   const dt = Math.min(0.05, clock.getDelta());
+  terrainSyncTimer += dt;
 
   camera.rotation.y += movement.turn * turnSpeed * dt;
 
@@ -315,9 +523,9 @@ function animate() {
   strafeVel += movement.strafe * accel * dt;
   verticalVel += movement.vertical * verticalAccel * dt;
 
-  forwardVel = THREE.MathUtils.clamp(forwardVel, -maxSpeed, maxSpeed);
-  strafeVel = THREE.MathUtils.clamp(strafeVel, -maxSpeed, maxSpeed);
-  verticalVel = THREE.MathUtils.clamp(verticalVel, -maxVerticalSpeed, maxVerticalSpeed);
+  forwardVel = clamp(forwardVel, -maxSpeed, maxSpeed);
+  strafeVel = clamp(strafeVel, -maxSpeed, maxSpeed);
+  verticalVel = clamp(verticalVel, -maxVerticalSpeed, maxVerticalSpeed);
 
   if (!movement.forward) forwardVel = damp(forwardVel, drag, dt);
   if (!movement.strafe) strafeVel = damp(strafeVel, drag, dt);
@@ -334,38 +542,33 @@ function animate() {
   camera.position.addScaledVector(right, strafeVel * dt);
   camera.position.y += verticalVel * dt;
 
-  camera.position.y = THREE.MathUtils.clamp(camera.position.y, -50, 2000);
+  camera.position.y = clamp(camera.position.y, -50, 3000);
 
   const speed = Math.hypot(forwardVel, strafeVel, verticalVel);
-  const heading = THREE.MathUtils.radToDeg(camera.rotation.y);
-  const normalizedHeading = (heading % 360) + 360;
+  const heading = THREE.MathUtils.radToDeg(Math.atan2(forward.x, -forward.z));
+  const normalizedHeading = (heading + 360) % 360;
 
   hudSpeed.textContent = `${speed.toFixed(1)} m/s`;
   hudAlt.textContent = `${camera.position.y.toFixed(1)} m`;
-  hudHeading.textContent = `${(normalizedHeading % 360).toFixed(0)}°`;
+  hudHeading.textContent = `${normalizedHeading.toFixed(0)}°`;
   hudCardinal.textContent = headingToCardinal(normalizedHeading);
+
+  syncTerrainTiles().catch((error) => console.error(error));
 
   renderer.render(scene, camera);
 }
 
 async function init() {
+  await initGoogleTiles();
+
   try {
-    const terrain = await createTerrainMesh();
-    scene.add(terrain.mesh);
-
-    camera.position.set(0, terrain.centerHeight + 220, 380);
-    water.position.y = Math.max(0, Math.min(terrain.minHeight + 5, 15));
-
-    try {
-      await applyGoogleSatelliteTexture(terrain.material);
-    } catch (error) {
-      hudSurface.textContent = "DEM (local) - google failed";
-      console.error(error);
-    }
+    const center = await ensureTerrainTile(centerTile.x, centerTile.y, TERRAIN_LOD_RINGS[0].segments);
+    camera.position.set(0, center.centerHeight + 220, tileSizeMeters * 0.3);
   } catch (error) {
     console.error(error);
   }
 
+  await syncTerrainTiles(true);
   animate();
 }
 

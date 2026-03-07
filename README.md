@@ -12,7 +12,7 @@ Web-based Three.js first-person flyover prototype for Saguenay, QC, Canada.
   - `e`: strafe right
   - `PageUp`: move up
   - `PageDown`: move down
-- Real elevation terrain from a Terrarium DEM tile centered on Saguenay.
+- Real elevation terrain from streamed Terrarium DEM tiles around Saguenay.
 - High interactivity prioritized over terrain resolution.
 
 ## Run
@@ -30,8 +30,11 @@ This project is intentionally no-build for quick iteration.
 - Default fetch target:
   - `assets/terrain/saguenay-center-z10-x309-y354.png`
   - `assets/terrain/saguenay-center-z10-x309-y354.json`
+- Runtime terrain loading:
+  - Client streams nearby Terrarium tiles (`z11`) around camera position
+  - Basic LOD rings: high detail center tile, lower detail outer rings
 - Optional imagery overlay:
-  - Google Map Tiles API satellite tile for the same `z/x/y`
+  - Google Map Tiles API satellite tile draped per loaded terrain tile
   - Reads key from `.env` (`MAP_TILES_API_KEY` or `GOOGLE_MAPS_API_KEY`)
 
 ## Project Structure
@@ -54,6 +57,6 @@ This project is intentionally no-build for quick iteration.
 - Hosted dataset: `https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png`
 
 ## Next Iterations
-1. Add multi-tile chunk loading around the camera.
-2. Add terrain LOD rings and culling.
-3. Add water/fjord mask and POI overlays.
+1. Add tile-level frustum culling and request prioritization.
+2. Add water/fjord mask and POI overlays.
+3. Add road/label overlays from vector data.
