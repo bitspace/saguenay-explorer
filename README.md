@@ -25,22 +25,20 @@ This project is intentionally no-build for quick iteration.
 
 ## Terrain Data Pipeline (Current)
 - DEM source: Mapzen Terrarium (`elevation-tiles-prod`)
-- Fetch script:
-  - `./scripts/fetch_terrarium_tile.sh`
-- Default fetch target:
-  - `assets/terrain/saguenay-center-z10-x309-y354.png`
-  - `assets/terrain/saguenay-center-z10-x309-y354.json`
-- Runtime terrain loading:
+- Runtime terrain loading (implemented):
   - Client streams nearby Terrarium tiles (`z11`) around camera position
   - Basic LOD rings: high detail center tile, lower detail outer rings
 - Optional imagery overlay:
   - Google Map Tiles API satellite tile draped per loaded terrain tile
   - Reads key from `.env` (`MAP_TILES_API_KEY` or `GOOGLE_MAPS_API_KEY`)
+- Optional helper script (not required at runtime):
+  - `./scripts/fetch_terrarium_tile.sh`
+  - Downloads a local reference tile to `assets/terrain/`
 
 ## Project Structure
 - `index.html` - app shell
 - `src/styles.css` - styling and HUD
-- `src/main.js` - Three.js scene, DEM decoding, Google satellite overlay, and controls
+- `src/main.js` - Three.js scene, streamed DEM terrain, Google satellite overlay, and controls
 - `scripts/fetch_terrarium_tile.sh` - DEM tile downloader + metadata writer
 - `docs/implementation-spec.md` - concrete build and data pipeline plan
 
@@ -51,6 +49,11 @@ This project is intentionally no-build for quick iteration.
 3. Ensure key restrictions allow:
    - Referrer: `http://localhost:5173/*`
    - API: `Map Tiles API`
+
+## Current Limitations
+- The `.env` key-loading path is intended for local development convenience.
+- In production, use a safer key-delivery approach and strict key restrictions.
+- Terrain collision/ground-following and road/label overlays are not implemented yet.
 
 ## Attribution
 - Terrain tiles from `https://github.com/tilezen/joerd/blob/master/docs/terrarium.md`
