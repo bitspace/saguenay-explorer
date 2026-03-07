@@ -6,6 +6,7 @@ const hudAlt = document.getElementById("hud-alt");
 const hudHeading = document.getElementById("hud-heading");
 const hudCardinal = document.getElementById("hud-cardinal");
 const hudSurface = document.getElementById("hud-surface");
+const hudPois = document.getElementById("hud-pois");
 const attribution = document.getElementById("attribution");
 
 const TERRAIN_CENTER = {
@@ -124,6 +125,7 @@ const googleTiles = {
 let terrainSyncTimer = 0;
 let minLoadedHeight = Number.POSITIVE_INFINITY;
 let maxLoadedHeight = Number.NEGATIVE_INFINITY;
+let poiRenderedCount = 0;
 
 const cameraFrustum = new THREE.Frustum();
 const frustumMatrix = new THREE.Matrix4();
@@ -426,9 +428,15 @@ function createLabelSprite(text) {
 
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
-  const material = new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false });
+  const material = new THREE.SpriteMaterial({
+    map: texture,
+    transparent: true,
+    depthTest: false,
+    depthWrite: false,
+  });
   const sprite = new THREE.Sprite(material);
-  sprite.scale.set(180, 54, 1);
+  sprite.scale.set(300, 90, 1);
+  sprite.renderOrder = 10;
   return sprite;
 }
 
@@ -467,23 +475,51 @@ function createFjordMask() {
 }
 
 async function createPoiOverlays() {
+  poiRenderedCount = 0;
+  hudPois.textContent = `0/${POIS.length}`;
+
   for (const poi of POIS) {
     try {
       const world = lonLatToWorldPosition(poi.lon, poi.lat);
       const groundHeight = await sampleHeightAtLonLat(poi.lon, poi.lat);
 
       const marker = new THREE.Mesh(
-        new THREE.CylinderGeometry(3, 3, 50, 12),
-        new THREE.MeshStandardMaterial({ color: 0xffd166, roughness: 0.45, metalness: 0.12 }),
+        new THREE.CylinderGeometry(6, 6, 120, 16),
+        new THREE.MeshStandardMaterial({
+          color: 0xffc94d,
+          emissive: 0x5a3c00,
+          emissiveIntensity: 0.45,
+          roughness: 0.35,
+          metalness: 0.18,
+        }),
       );
-      marker.position.set(world.x, groundHeight + 26, world.z);
+      marker.position.set(world.x, groundHeight + 62, world.z);
+      marker.renderOrder = 8;
       overlayGroup.add(marker);
 
+      const beacon = new THREE.Mesh(
+        new THREE.SphereGeometry(16, 24, 16),
+        new THREE.MeshStandardMaterial({
+          color: 0xfff3b0,
+          emissive: 0xffd166,
+          emissiveIntensity: 0.9,
+          roughness: 0.2,
+          metalness: 0.05,
+        }),
+      );
+      beacon.position.set(world.x, groundHeight + 135, world.z);
+      beacon.renderOrder = 9;
+      overlayGroup.add(beacon);
+
       const label = createLabelSprite(poi.name);
-      label.position.set(world.x, groundHeight + 70, world.z);
+      label.position.set(world.x, groundHeight + 190, world.z);
       overlayGroup.add(label);
+
+      poiRenderedCount += 1;
+      hudPois.textContent = `${poiRenderedCount}/${POIS.length}`;
     } catch (error) {
       console.warn(`POI failed: ${poi.name}`, error);
+      hudPois.textContent = `${poiRenderedCount}/${POIS.length} (error)`;
     }
   }
 }
