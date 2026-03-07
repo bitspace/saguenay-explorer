@@ -32,6 +32,9 @@ Build a responsive web-based first-person flyover over Saguenay, QC with moderat
 - Optional Google satellite imagery drape via Map Tiles API:
   - `POST /v1/createSession`
   - `GET /v1/2dtiles/{z}/{x}/{y}?session=...&key=...`
+- Overlay layer:
+  - Fjord/water mask meshes aligned in local world space.
+  - Labeled POI markers with approximate terrain anchoring.
 - Fog and simple materials for performance.
 
 ## Runtime Terrain Strategy (Next)
@@ -59,4 +62,6 @@ Build a responsive web-based first-person flyover over Saguenay, QC with moderat
 2. Completed: real DEM ingest + single-tile terrain rendering.
 3. Completed: runtime multi-tile terrain chunk loading and LOD rings.
 4. Completed: tile-level culling and prioritized tile loading.
-5. Planned: optional guided tour path mode.
+5. Completed: water/fjord mask and POI overlays.
+6. Planned: road/label overlays from vector data.
+7. Planned: optional guided tour path mode.

@@ -13,6 +13,7 @@ Web-based Three.js first-person flyover prototype for Saguenay, QC, Canada.
   - `PageUp`: move up
   - `PageDown`: move down
 - Real elevation terrain from streamed Terrarium DEM tiles around Saguenay.
+- Fjord/water mask overlays and labeled POI markers.
 - High interactivity prioritized over terrain resolution.
 
 ## Run
@@ -29,6 +30,9 @@ This project is intentionally no-build for quick iteration.
   - Client streams nearby Terrarium tiles (`z11`) around camera position
   - Basic LOD rings: high detail center tile, lower detail outer rings
   - Tile-level visibility culling and prioritized load queue
+- Overlays (implemented):
+  - Localized fjord/water mask meshes near the Saguenay water corridor
+  - POI markers + labels (La Baie, Chicoutimi, Jonquiere, Saguenay)
 - Optional imagery overlay:
   - Google Map Tiles API satellite tile draped per loaded terrain tile
   - Reads key from `.env` (`MAP_TILES_API_KEY` or `GOOGLE_MAPS_API_KEY`)
@@ -54,7 +58,7 @@ This project is intentionally no-build for quick iteration.
 ## Current Limitations
 - The `.env` key-loading path is intended for local development convenience.
 - In production, use a safer key-delivery approach and strict key restrictions.
-- Terrain collision/ground-following and road/label overlays are not implemented yet.
+- Terrain collision/ground-following and road network overlays are not implemented yet.
 
 ## Attribution
 - Terrain tiles from `https://github.com/tilezen/joerd/blob/master/docs/terrarium.md`
@@ -62,5 +66,5 @@ This project is intentionally no-build for quick iteration.
 
 ## Next Iterations
 1. Add hysteresis to reduce LOD/tile churn during sharp turns.
-2. Add water/fjord mask and POI overlays.
-3. Add road/label overlays from vector data.
+2. Add road/label overlays from vector data.
+3. Add guided tour path mode.

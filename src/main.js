@@ -28,6 +28,21 @@ const TERRAIN_MAX_RADIUS = TERRAIN_LOD_RINGS[TERRAIN_LOD_RINGS.length - 1].radiu
 const TERRAIN_SYNC_INTERVAL_SECONDS = 0.2;
 const TERRAIN_MAX_CONCURRENT_LOADS = 2;
 const TERRAIN_ALWAYS_VISIBLE_RADIUS = 1;
+const POI_LABEL_FONT = "600 16px 'IBM Plex Sans', sans-serif";
+
+const FJORD_MASK_POINTS = [
+  { lat: 48.432, lon: -70.92, rx: 900, rz: 300 },
+  { lat: 48.405, lon: -70.985, rx: 900, rz: 280 },
+  { lat: 48.395, lon: -71.055, rx: 860, rz: 260 },
+  { lat: 48.41, lon: -71.14, rx: 760, rz: 240 },
+];
+
+const POIS = [
+  { name: "La Baie", lat: 48.334, lon: -70.879 },
+  { name: "Chicoutimi", lat: 48.428, lon: -71.064 },
+  { name: "Jonquiere", lat: 48.416, lon: -71.25 },
+  { name: "Saguenay", lat: 48.423, lon: -71.072 },
+];
 
 const scene = new THREE.Scene();
 scene.fog = new THREE.Fog(0xa7c3d7, 160, 3600);
@@ -43,6 +58,8 @@ app.appendChild(renderer.domElement);
 
 const terrainGroup = new THREE.Group();
 scene.add(terrainGroup);
+const overlayGroup = new THREE.Group();
+scene.add(overlayGroup);
 
 const hemiLight = new THREE.HemisphereLight(0xdbefff, 0x4a6170, 1.1);
 scene.add(hemiLight);
@@ -59,19 +76,7 @@ farGround.rotation.x = -Math.PI / 2;
 farGround.position.y = -10;
 scene.add(farGround);
 
-const water = new THREE.Mesh(
-  new THREE.PlaneGeometry(12000, 12000, 1, 1),
-  new THREE.MeshStandardMaterial({
-    color: 0x4b7693,
-    metalness: 0.14,
-    roughness: 0.62,
-    transparent: true,
-    opacity: 0.82,
-  }),
-);
-water.rotation.x = -Math.PI / 2;
-water.position.y = 0;
-scene.add(water);
+const waterMeshes = [];
 
 const keyDown = new Set();
 const movement = {
@@ -239,6 +244,14 @@ function lonLatToTile(lon, lat, zoom) {
   return { x, y };
 }
 
+function lonLatToTileFloat(lon, lat, zoom) {
+  const n = 2 ** zoom;
+  const x = ((lon + 180) / 360) * n;
+  const latRad = THREE.MathUtils.degToRad(lat);
+  const y = ((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2) * n;
+  return { x, y };
+}
+
 function terrariumTileUrl(zoom, x, y) {
   return TERRAIN_FETCH_TEMPLATE
     .replace("{z}", String(zoom))
@@ -380,6 +393,99 @@ function tileToWorldPosition(x, y) {
     x: (x - centerTile.x) * tileSizeMeters,
     z: (y - centerTile.y) * tileSizeMeters,
   };
+}
+
+function lonLatToWorldPosition(lon, lat) {
+  const tile = lonLatToTileFloat(lon, lat, TERRAIN_CENTER.zoom);
+  return {
+    x: (tile.x - centerTile.x) * tileSizeMeters,
+    z: (tile.y - centerTile.y) * tileSizeMeters,
+  };
+}
+
+function setWaterLevel(level) {
+  for (const waterMesh of waterMeshes) {
+    waterMesh.position.y = level;
+  }
+}
+
+function createLabelSprite(text) {
+  const canvas = document.createElement("canvas");
+  canvas.width = 320;
+  canvas.height = 96;
+
+  const ctx = canvas.getContext("2d");
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = "rgba(10, 18, 28, 0.72)";
+  ctx.fillRect(12, 12, canvas.width - 24, canvas.height - 24);
+  ctx.fillStyle = "#f4f8fb";
+  ctx.font = POI_LABEL_FONT;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(text, canvas.width / 2, canvas.height / 2);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  const material = new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false });
+  const sprite = new THREE.Sprite(material);
+  sprite.scale.set(180, 54, 1);
+  return sprite;
+}
+
+async function sampleHeightAtLonLat(lon, lat) {
+  const tileFloat = lonLatToTileFloat(lon, lat, TERRAIN_CENTER.zoom);
+  const x = Math.floor(tileFloat.x);
+  const y = Math.floor(tileFloat.y);
+  const decoded = await decodeTileHeights(x, y);
+
+  const px = clamp(Math.round((tileFloat.x - x) * (decoded.width - 1)), 0, decoded.width - 1);
+  const py = clamp(Math.round((tileFloat.y - y) * (decoded.height - 1)), 0, decoded.height - 1);
+  const idx = (py * decoded.width + px) * 4;
+  return decodeTerrariumHeight(decoded.data[idx], decoded.data[idx + 1], decoded.data[idx + 2]);
+}
+
+function createFjordMask() {
+  for (const point of FJORD_MASK_POINTS) {
+    const pos = lonLatToWorldPosition(point.lon, point.lat);
+    const mask = new THREE.Mesh(
+      new THREE.CircleGeometry(1, 64),
+      new THREE.MeshStandardMaterial({
+        color: 0x4b7693,
+        metalness: 0.1,
+        roughness: 0.6,
+        transparent: true,
+        opacity: 0.86,
+      }),
+    );
+    mask.rotation.x = -Math.PI / 2;
+    mask.scale.set(point.rx, point.rz, 1);
+    mask.position.set(pos.x, 0, pos.z);
+    mask.renderOrder = 2;
+    overlayGroup.add(mask);
+    waterMeshes.push(mask);
+  }
+}
+
+async function createPoiOverlays() {
+  for (const poi of POIS) {
+    try {
+      const world = lonLatToWorldPosition(poi.lon, poi.lat);
+      const groundHeight = await sampleHeightAtLonLat(poi.lon, poi.lat);
+
+      const marker = new THREE.Mesh(
+        new THREE.CylinderGeometry(3, 3, 50, 12),
+        new THREE.MeshStandardMaterial({ color: 0xffd166, roughness: 0.45, metalness: 0.12 }),
+      );
+      marker.position.set(world.x, groundHeight + 26, world.z);
+      overlayGroup.add(marker);
+
+      const label = createLabelSprite(poi.name);
+      label.position.set(world.x, groundHeight + 70, world.z);
+      overlayGroup.add(label);
+    } catch (error) {
+      console.warn(`POI failed: ${poi.name}`, error);
+    }
+  }
 }
 
 function updateCameraFrustum() {
@@ -577,7 +683,7 @@ function syncTerrainTiles(force = false) {
   }
 
   if (Number.isFinite(minLoadedHeight) && Number.isFinite(maxLoadedHeight)) {
-    water.position.y = clamp(minLoadedHeight + 4, -5, 20);
+    setWaterLevel(clamp(minLoadedHeight + 4, -5, 20));
   }
 }
 
@@ -653,6 +759,7 @@ function animate() {
 }
 
 async function init() {
+  createFjordMask();
   await initGoogleTiles();
 
   try {
@@ -662,6 +769,7 @@ async function init() {
     console.error(error);
   }
 
+  await createPoiOverlays();
   syncTerrainTiles(true);
   animate();
 }
