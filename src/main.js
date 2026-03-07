@@ -26,6 +26,8 @@ const TERRAIN_LOD_RINGS = [
 
 const TERRAIN_MAX_RADIUS = TERRAIN_LOD_RINGS[TERRAIN_LOD_RINGS.length - 1].radius;
 const TERRAIN_SYNC_INTERVAL_SECONDS = 0.2;
+const TERRAIN_MAX_CONCURRENT_LOADS = 2;
+const TERRAIN_ALWAYS_VISIBLE_RADIUS = 1;
 
 const scene = new THREE.Scene();
 scene.fog = new THREE.Fog(0xa7c3d7, 160, 3600);
@@ -104,6 +106,8 @@ const keyMap = {
 const terrainTiles = new Map();
 const tileRequests = new Map();
 const decodedTileCache = new Map();
+let terrainLoadQueue = [];
+let activeTerrainLoads = 0;
 
 const googleTiles = {
   apiKey: "",
@@ -115,6 +119,12 @@ const googleTiles = {
 let terrainSyncTimer = 0;
 let minLoadedHeight = Number.POSITIVE_INFINITY;
 let maxLoadedHeight = Number.NEGATIVE_INFINITY;
+
+const cameraFrustum = new THREE.Frustum();
+const frustumMatrix = new THREE.Matrix4();
+const forwardScratch = new THREE.Vector3();
+const toTileScratch = new THREE.Vector3();
+const tileSphereScratch = new THREE.Sphere(new THREE.Vector3(), 1);
 
 function tileKey(x, y) {
   return `${x}/${y}`;
@@ -372,6 +382,73 @@ function tileToWorldPosition(x, y) {
   };
 }
 
+function updateCameraFrustum() {
+  camera.updateMatrixWorld();
+  frustumMatrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+  cameraFrustum.setFromProjectionMatrix(frustumMatrix);
+}
+
+function isTileLikelyVisible(x, y, currentTile) {
+  const dx = x - currentTile.x;
+  const dy = y - currentTile.y;
+  const ringDistance = Math.max(Math.abs(dx), Math.abs(dy));
+  if (ringDistance <= TERRAIN_ALWAYS_VISIBLE_RADIUS) {
+    return true;
+  }
+
+  const worldPos = tileToWorldPosition(x, y);
+  const verticalCenter =
+    Number.isFinite(minLoadedHeight) && Number.isFinite(maxLoadedHeight)
+      ? (minLoadedHeight + maxLoadedHeight) * 0.5
+      : 200;
+  const radius = Math.sqrt(2) * (tileSizeMeters * 0.5) + 500;
+
+  tileSphereScratch.center.set(worldPos.x, verticalCenter, worldPos.z);
+  tileSphereScratch.radius = radius;
+
+  return cameraFrustum.intersectsSphere(tileSphereScratch);
+}
+
+function tilePriority(target, currentTile, cameraForward) {
+  const dx = target.x - currentTile.x;
+  const dy = target.y - currentTile.y;
+  const ringDistance = Math.max(Math.abs(dx), Math.abs(dy));
+  const worldPos = tileToWorldPosition(target.x, target.y);
+
+  toTileScratch.set(worldPos.x - camera.position.x, 0, worldPos.z - camera.position.z);
+  let isAhead = true;
+  if (toTileScratch.lengthSq() > 1e-6) {
+    toTileScratch.normalize();
+    const facingDot = cameraForward.dot(toTileScratch);
+    isAhead = facingDot > 0;
+  }
+
+  const visibleBias = target.visible ? 0 : 100;
+  const aheadBias = isAhead ? -4 : 8;
+  const lodBias = target.segments === TERRAIN_LOD_RINGS[0].segments ? -6 : 0;
+
+  return visibleBias + ringDistance * 12 + aheadBias + lodBias;
+}
+
+function processTerrainLoadQueue() {
+  while (activeTerrainLoads < TERRAIN_MAX_CONCURRENT_LOADS && terrainLoadQueue.length > 0) {
+    const next = terrainLoadQueue.shift();
+    const requestId = tileRequestKey(next.x, next.y, next.segments);
+
+    if (tileRequests.has(requestId)) {
+      continue;
+    }
+
+    activeTerrainLoads += 1;
+    ensureTerrainTile(next.x, next.y, next.segments)
+      .catch((error) => console.error(error))
+      .finally(() => {
+        activeTerrainLoads = Math.max(0, activeTerrainLoads - 1);
+        processTerrainLoadQueue();
+      });
+  }
+}
+
 function disposeTile(tile) {
   terrainGroup.remove(tile.mesh);
   tile.mesh.geometry.dispose();
@@ -440,14 +517,18 @@ async function ensureTerrainTile(x, y, segments) {
   }
 }
 
-async function syncTerrainTiles(force = false) {
+function syncTerrainTiles(force = false) {
   if (!force && terrainSyncTimer < TERRAIN_SYNC_INTERVAL_SECONDS) {
     return;
   }
 
   terrainSyncTimer = 0;
+  updateCameraFrustum();
 
   const currentTile = worldToTileIndex(camera.position.x, camera.position.z);
+  camera.getWorldDirection(forwardScratch);
+  forwardScratch.y = 0;
+  forwardScratch.normalize();
   const desired = new Map();
 
   for (let dy = -TERRAIN_MAX_RADIUS; dy <= TERRAIN_MAX_RADIUS; dy += 1) {
@@ -458,28 +539,41 @@ async function syncTerrainTiles(force = false) {
       const x = currentTile.x + dx;
       const y = currentTile.y + dy;
       const segments = lodForDistance(distance);
-      desired.set(tileKey(x, y), { x, y, segments });
+      const visible = isTileLikelyVisible(x, y, currentTile);
+      desired.set(tileKey(x, y), { x, y, segments, visible });
     }
   }
 
-  const loads = [];
+  const queue = [];
 
   for (const target of desired.values()) {
     const existing = terrainTiles.get(tileKey(target.x, target.y));
     if (!existing || existing.segments !== target.segments) {
-      loads.push(ensureTerrainTile(target.x, target.y, target.segments));
+      const requestId = tileRequestKey(target.x, target.y, target.segments);
+      if (!tileRequests.has(requestId)) {
+        queue.push({
+          x: target.x,
+          y: target.y,
+          segments: target.segments,
+          priority: tilePriority(target, currentTile, forwardScratch),
+        });
+      }
     }
   }
+
+  queue.sort((a, b) => a.priority - b.priority);
+  terrainLoadQueue = queue;
+  processTerrainLoadQueue();
 
   for (const [key, tile] of terrainTiles.entries()) {
     if (!desired.has(key)) {
       disposeTile(tile);
       terrainTiles.delete(key);
+      continue;
     }
-  }
 
-  if (loads.length) {
-    await Promise.allSettled(loads);
+    const target = desired.get(key);
+    tile.mesh.visible = target.visible;
   }
 
   if (Number.isFinite(minLoadedHeight) && Number.isFinite(maxLoadedHeight)) {
@@ -553,7 +647,7 @@ function animate() {
   hudHeading.textContent = `${normalizedHeading.toFixed(0)}°`;
   hudCardinal.textContent = headingToCardinal(normalizedHeading);
 
-  syncTerrainTiles().catch((error) => console.error(error));
+  syncTerrainTiles();
 
   renderer.render(scene, camera);
 }
@@ -568,7 +662,7 @@ async function init() {
     console.error(error);
   }
 
-  await syncTerrainTiles(true);
+  syncTerrainTiles(true);
   animate();
 }
 

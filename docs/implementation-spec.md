@@ -27,13 +27,14 @@ Build a responsive web-based first-person flyover over Saguenay, QC with moderat
   - Ring 0: high detail (255 segments)
   - Ring 1: medium detail (96 segments)
   - Ring 2: low detail (48 segments)
+- Tile-level frustum-aware visibility culling.
+- Prioritized load queue with capped concurrent tile requests.
 - Optional Google satellite imagery drape via Map Tiles API:
   - `POST /v1/createSession`
   - `GET /v1/2dtiles/{z}/{x}/{y}?session=...&key=...`
 - Fog and simple materials for performance.
 
 ## Runtime Terrain Strategy (Next)
-- Tile-level frustum culling and prioritized load queue.
 - Extend to 3+ LOD rings with hysteresis to reduce tile churn.
 - Height sampling for collision floor and altitude cues.
 
@@ -57,5 +58,5 @@ Build a responsive web-based first-person flyover over Saguenay, QC with moderat
 1. Completed: procedural terrain + keyboard fly controls.
 2. Completed: real DEM ingest + single-tile terrain rendering.
 3. Completed: runtime multi-tile terrain chunk loading and LOD rings.
-4. In progress: water/river mask and POI overlays.
+4. Completed: tile-level culling and prioritized tile loading.
 5. Planned: optional guided tour path mode.

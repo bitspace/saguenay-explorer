@@ -28,6 +28,7 @@ This project is intentionally no-build for quick iteration.
 - Runtime terrain loading (implemented):
   - Client streams nearby Terrarium tiles (`z11`) around camera position
   - Basic LOD rings: high detail center tile, lower detail outer rings
+  - Tile-level visibility culling and prioritized load queue
 - Optional imagery overlay:
   - Google Map Tiles API satellite tile draped per loaded terrain tile
   - Reads key from `.env` (`MAP_TILES_API_KEY` or `GOOGLE_MAPS_API_KEY`)
@@ -60,6 +61,6 @@ This project is intentionally no-build for quick iteration.
 - Hosted dataset: `https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png`
 
 ## Next Iterations
-1. Add tile-level frustum culling and request prioritization.
+1. Add hysteresis to reduce LOD/tile churn during sharp turns.
 2. Add water/fjord mask and POI overlays.
 3. Add road/label overlays from vector data.
