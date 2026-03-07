@@ -355,6 +355,21 @@ function buildTerrainGeometry(decoded, segments, tileSizeMeters) {
   return { geometry, minHeight, maxHeight, centerHeight };
 }
 
+function buildFallbackGeometry(segments, tileSizeMeters) {
+  const geometry = new THREE.PlaneGeometry(tileSizeMeters, tileSizeMeters, segments, segments);
+  geometry.rotateX(-Math.PI / 2);
+
+  const position = geometry.attributes.position;
+  const baseHeight = 80;
+
+  for (let i = 0; i < position.count; i += 1) {
+    position.setY(i, baseHeight);
+  }
+
+  geometry.computeVertexNormals();
+  return { geometry, minHeight: baseHeight, maxHeight: baseHeight, centerHeight: baseHeight };
+}
+
 async function applyGoogleSatelliteTexture(material, x, y) {
   if (!googleTiles.ready) return;
 
@@ -479,48 +494,53 @@ async function createPoiOverlays() {
   hudPois.textContent = `0/${POIS.length}`;
 
   for (const poi of POIS) {
+    const world = lonLatToWorldPosition(poi.lon, poi.lat);
+    let groundHeight = Number.isFinite(minLoadedHeight) ? minLoadedHeight + 20 : 120;
+
     try {
-      const world = lonLatToWorldPosition(poi.lon, poi.lat);
-      const groundHeight = await sampleHeightAtLonLat(poi.lon, poi.lat);
+      // Height sampling is best-effort; POI still renders if sampling fails or times out.
+      groundHeight = await Promise.race([
+        sampleHeightAtLonLat(poi.lon, poi.lat),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("POI height timeout")), 600)),
+      ]);
+    } catch {}
 
-      const marker = new THREE.Mesh(
-        new THREE.CylinderGeometry(6, 6, 120, 16),
-        new THREE.MeshStandardMaterial({
-          color: 0xffc94d,
-          emissive: 0x5a3c00,
-          emissiveIntensity: 0.45,
-          roughness: 0.35,
-          metalness: 0.18,
-        }),
-      );
-      marker.position.set(world.x, groundHeight + 62, world.z);
-      marker.renderOrder = 8;
-      overlayGroup.add(marker);
+    const marker = new THREE.Mesh(
+      new THREE.CylinderGeometry(8, 8, 320, 20),
+      new THREE.MeshStandardMaterial({
+        color: 0xffc94d,
+        emissive: 0x6c4c00,
+        emissiveIntensity: 0.65,
+        roughness: 0.3,
+        metalness: 0.2,
+        depthTest: false,
+      }),
+    );
+    marker.position.set(world.x, groundHeight + 165, world.z);
+    marker.renderOrder = 8;
+    overlayGroup.add(marker);
 
-      const beacon = new THREE.Mesh(
-        new THREE.SphereGeometry(16, 24, 16),
-        new THREE.MeshStandardMaterial({
-          color: 0xfff3b0,
-          emissive: 0xffd166,
-          emissiveIntensity: 0.9,
-          roughness: 0.2,
-          metalness: 0.05,
-        }),
-      );
-      beacon.position.set(world.x, groundHeight + 135, world.z);
-      beacon.renderOrder = 9;
-      overlayGroup.add(beacon);
+    const beacon = new THREE.Mesh(
+      new THREE.SphereGeometry(28, 24, 16),
+      new THREE.MeshStandardMaterial({
+        color: 0xfff3b0,
+        emissive: 0xffd166,
+        emissiveIntensity: 1.2,
+        roughness: 0.15,
+        metalness: 0.05,
+        depthTest: false,
+      }),
+    );
+    beacon.position.set(world.x, groundHeight + 345, world.z);
+    beacon.renderOrder = 9;
+    overlayGroup.add(beacon);
 
-      const label = createLabelSprite(poi.name);
-      label.position.set(world.x, groundHeight + 190, world.z);
-      overlayGroup.add(label);
+    const label = createLabelSprite(poi.name);
+    label.position.set(world.x, groundHeight + 420, world.z);
+    overlayGroup.add(label);
 
-      poiRenderedCount += 1;
-      hudPois.textContent = `${poiRenderedCount}/${POIS.length}`;
-    } catch (error) {
-      console.warn(`POI failed: ${poi.name}`, error);
-      hudPois.textContent = `${poiRenderedCount}/${POIS.length} (error)`;
-    }
+    poiRenderedCount += 1;
+    hudPois.textContent = `${poiRenderedCount}/${POIS.length}`;
   }
 }
 
@@ -616,14 +636,22 @@ async function ensureTerrainTile(x, y, segments) {
   }
 
   const promise = (async () => {
-    const decoded = await decodeTileHeights(x, y);
-    const built = buildTerrainGeometry(decoded, segments, tileSizeMeters);
+    let built;
+    let isFallbackTile = false;
+
+    try {
+      const decoded = await decodeTileHeights(x, y);
+      built = buildTerrainGeometry(decoded, segments, tileSizeMeters);
+    } catch {
+      built = buildFallbackGeometry(segments, tileSizeMeters);
+      isFallbackTile = true;
+    }
 
     minLoadedHeight = Math.min(minLoadedHeight, built.minHeight);
     maxLoadedHeight = Math.max(maxLoadedHeight, built.maxHeight);
 
     const material = new THREE.MeshStandardMaterial({
-      color: 0x7f9772,
+      color: isFallbackTile ? 0x8b8f95 : 0x7f9772,
       roughness: 0.95,
       metalness: 0.02,
     });
@@ -805,9 +833,13 @@ async function init() {
     console.error(error);
   }
 
-  await createPoiOverlays();
   syncTerrainTiles(true);
   animate();
+
+  createPoiOverlays().catch((error) => {
+    hudPois.textContent = `${poiRenderedCount}/${POIS.length} (error)`;
+    console.error(error);
+  });
 }
 
 init();
